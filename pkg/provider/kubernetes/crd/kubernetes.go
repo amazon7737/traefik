@@ -3,6 +3,7 @@ package crd
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -62,6 +63,7 @@ type Provider struct {
 	ThrottleDuration             ptypes.Duration     `description:"Ingress refresh throttle duration" json:"throttleDuration,omitempty" toml:"throttleDuration,omitempty" yaml:"throttleDuration,omitempty" export:"true"`
 	AllowEmptyServices           bool                `description:"Allow the creation of services without endpoints." json:"allowEmptyServices,omitempty" toml:"allowEmptyServices,omitempty" yaml:"allowEmptyServices,omitempty" export:"true"`
 	NativeLBByDefault            bool                `description:"Defines whether to use Native Kubernetes load-balancing mode by default." json:"nativeLBByDefault,omitempty" toml:"nativeLBByDefault,omitempty" yaml:"nativeLBByDefault,omitempty" export:"true"`
+	DefaultTLSStoreName          string              `description:"Name of the TLSStore resource to use as the default TLS store." json:"defaultTLSStoreName,omitempty" toml:"defaultTLSStoreName,omitempty" yaml:"defaultTLSStoreName,omitempty" export:"true"`
 	DisableClusterScopeResources bool                `description:"Disables the lookup of cluster scope resources (incompatible with IngressClasses and NodePortLB enabled services)." json:"disableClusterScopeResources,omitempty" toml:"disableClusterScopeResources,omitempty" yaml:"disableClusterScopeResources,omitempty" export:"true"`
 
 	routerTransform k8s.RouterTransform
@@ -218,7 +220,7 @@ func (p *Provider) newK8sClient(ctx context.Context) (*clientWrapper, error) {
 }
 
 func (p *Provider) loadConfigurationFromCRD(ctx context.Context, client Client) *dynamic.Configuration {
-	stores, tlsConfigs := buildTLSStores(ctx, client)
+	stores, tlsConfigs := buildTLSStores(ctx, client, cmp.Or(p.DefaultTLSStoreName, tls.DefaultTLSStoreName))
 	if tlsConfigs == nil {
 		tlsConfigs = make(map[string]*tls.CertAndStores)
 	}
@@ -1373,7 +1375,7 @@ func buildTLSOptions(ctx context.Context, client Client) map[string]tls.Options 
 	return tlsOptions
 }
 
-func buildTLSStores(ctx context.Context, client Client) (map[string]tls.Store, map[string]*tls.CertAndStores) {
+func buildTLSStores(ctx context.Context, client Client, defaultStoreName string) (map[string]tls.Store, map[string]*tls.CertAndStores) {
 	tlsStoreCRD := client.GetTLSStores()
 	if len(tlsStoreCRD) == 0 {
 		return nil, nil
@@ -1388,9 +1390,9 @@ func buildTLSStores(ctx context.Context, client Client) (map[string]tls.Store, m
 
 		id := makeID(t.Namespace, t.Name)
 
-		// If the name is default, we override the default config.
-		if t.Name == tls.DefaultTLSStoreName {
-			id = t.Name
+		// The store matching the configured name becomes the default store.
+		if t.Name == defaultStoreName {
+			id = tls.DefaultTLSStoreName
 			nsDefault = append(nsDefault, t.Namespace)
 		}
 

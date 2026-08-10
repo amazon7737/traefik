@@ -12,6 +12,8 @@ Before creating `TLSStore` objects, you need to apply the [Traefik Kubernetes CR
 !!! Tip "Default TLS Store"
     Traefik currently only uses the TLS Store named "default". This default `TLSStore` should be in a namespace discoverable by Traefik. Since it is used by default on `IngressRoute` and `IngressRouteTCP` objects, there never is a need to actually reference it. This means that you cannot have two stores that are named default in different Kubernetes namespaces. As a consequence, with respect to TLS stores, the only change that makes sense (and only if needed) is to configure the default `TLSStore`.
 
+    When several Traefik instances share a namespace, the [`providers.kubernetesCRD.defaultTLSStoreName`](../../../../install-configuration/providers/kubernetes/kubernetes-crd.md#opt-providers-kubernetesCRD-defaultTLSStoreName) install option lets each instance use a `TLSStore` with a different name as its default TLS store.
+
 ## Configuration Example
 
 ```yaml tab="TLSStore"

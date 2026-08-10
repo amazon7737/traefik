@@ -200,6 +200,7 @@ providers:
     throttleDuration: 42s
     allowEmptyServices: true
     nativeLBByDefault: true
+    defaultTLSStoreName: foobar
     disableClusterScopeResources: true
   kubernetesGateway:
     endpoint: foobar
