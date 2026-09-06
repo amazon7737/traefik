@@ -108,6 +108,13 @@ func (s *BaseSuite) SetupSuite() {
 	require.NoError(s.T(), err)
 
 	s.network = dockerNetwork
+	// Testify registers TearDownSuite only after SetupSuite returns successfully.
+	t := s.T()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer cancel()
+		require.NoError(t, s.cleanupSuite(ctx))
+	})
 	s.hostIP = "172.31.42.1"
 	if isDockerDesktop(s.T()) {
 		s.hostIP = getDockerDesktopHostIP(s.T())
@@ -162,24 +169,41 @@ func isDockerDesktop(t *testing.T) bool {
 }
 
 func (s *BaseSuite) TearDownSuite() {
-	s.composeDown()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.T().Context()), 30*time.Second)
+	defer cancel()
+	require.NoError(s.T(), s.cleanupSuite(ctx))
+}
 
-	if s.vpn != nil {
-		err := s.vpn.Terminate(s.T().Context())
-		require.NoError(s.T(), err)
+func (s *BaseSuite) cleanupSuite(ctx context.Context) error {
+	var errs []error
+	for name, con := range s.containers {
+		if err := con.Terminate(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("terminate suite container %s: %w", name, err))
+			continue
+		}
+		delete(s.containers, name)
 	}
 
-	err := try.Do(5*time.Second, func() error {
-		if s.network != nil {
-			err := s.network.Remove(s.T().Context())
-			if err != nil {
-				return err
-			}
+	if s.vpn != nil {
+		if err := s.vpn.Terminate(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("terminate suite VPN: %w", err))
+		} else {
+			s.vpn = nil
 		}
+	}
 
-		return nil
-	})
-	require.NoError(s.T(), err)
+	if s.network != nil {
+		err := try.Do(5*time.Second, func() error {
+			return s.network.Remove(ctx)
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("remove suite network: %w", err))
+		} else {
+			s.network = nil
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // createComposeProject creates the docker compose project stored as a field in the BaseSuite.
@@ -485,6 +509,30 @@ func (s *BaseSuite) setupVPN(keyFile string) {
 	// Keep the suite VPN alive when individual tests tear down their compose services.
 	s.vpn = s.containers["tailscaled"]
 	delete(s.containers, "tailscaled")
+
+	ctx, cancel := context.WithTimeout(s.T().Context(), 30*time.Second)
+	defer cancel()
+
+	// A previous suite may still be selected as the subnet router after registration.
+	probe, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:    "traefik/whoami:v1.12.0",
+			Cmd:      []string{"-name", s.network.ID},
+			Networks: []string{s.network.Name},
+		},
+		Started: true,
+	})
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(s.T().Context()), 10*time.Second)
+		defer cleanupCancel()
+		require.NoError(s.T(), testcontainers.TerminateContainer(probe, testcontainers.StopContext(cleanupCtx)))
+	}()
+	require.NoError(s.T(), err)
+
+	ip, err := probe.ContainerIP(ctx)
+	require.NoError(s.T(), err)
+	require.NotEmpty(s.T(), ip)
+	require.NoError(s.T(), waitForVPNRoute(ctx, "http://"+ip, s.network.ID))
 }
 
 // composeExec runs the command in the given args in the given compose service container.
